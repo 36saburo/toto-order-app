@@ -39,9 +39,8 @@ const selectedItems = ref({})
 const searchQuery = ref('')
 const isEditMode = ref(false)
 
-// モーダルの状態管理（order用かprep用かを判別）
+// モーダルの状態管理（統合版）
 const showModal = ref(false)
-const activeModalType = ref('')
 
 // ==========================================
 // 3. データ保存と初期化 (onMounted / watch)
@@ -122,37 +121,40 @@ const removeItem = (supplier, item) => {
 }
 
 // ==========================================
-// 5. モーダルとLINE送信処理（発注・仕込み共通）
+// 5. モーダルとLINE送信処理（統合版）
 // ==========================================
-const openModal = (type) => {
-  if (type === 'order') {
-    if (Object.keys(selectedItems.value).length === 0) return alert('仕入れるアイテムを選択してください！')
-  } else if (type === 'prep') {
-    const hasPrep = prepItems.value.some(item => item.count > 0)
-    if (!hasPrep) return alert('仕込みアイテムが選択されていません！')
+const openModal = () => {
+  const hasOrder = Object.keys(selectedItems.value).length > 0
+  const hasPrep = prepItems.value.some(item => item.count > 0)
+  
+  if (!hasOrder && !hasPrep) {
+    return alert('発注または仕込みのデータがありません！')
   }
   
-  activeModalType.value = type
   showModal.value = true
 }
 
 const closeModal = () => showModal.value = false
 
 const sendToLine = () => {
-  let message = ''
+  let message = '【本日の業務連絡】\n\n'
   
-  if (activeModalType.value === 'order') {
-    message = '【本日の仕入れリスト】\n\n'
+  // 発注リストの追加
+  if (Object.keys(selectedItems.value).length > 0) {
+    message += '🛒 発注リスト\n'
     for (const [supplier, itemsObj] of Object.entries(selectedItems.value)) {
-      message += `・${supplier}\n`
+      message += `［${supplier}］\n`
       for (const [item, memo] of Object.entries(itemsObj)) {
-        message += memo.trim() !== '' ? `${item} （${memo}）\n` : `${item}\n`
+        message += memo.trim() !== '' ? `・${item} （${memo}）\n` : `・${item}\n`
       }
       message += '\n'
     }
-  } else if (activeModalType.value === 'prep') {
-    message = '【明日の仕込みリスト】\n\n'
-    const activePreps = prepItems.value.filter(item => item.count > 0)
+  }
+
+  // 仕込みリストの追加
+  const activePreps = prepItems.value.filter(item => item.count > 0)
+  if (activePreps.length > 0) {
+    message += '🔪 明日の仕込みリスト\n'
     activePreps.forEach(item => {
       message += `・${item.name}： ${item.count}\n`
     })
@@ -216,7 +218,7 @@ const sendToLine = () => {
         </div>
 
         <div class="bottom-bar" v-if="!isEditMode">
-          <button class="confirm-btn" @click="openModal('order')">確認画面へ進む</button>
+          <button class="confirm-btn" @click="openModal">確認画面へ進む</button>
         </div>
       </div>
 
@@ -244,45 +246,46 @@ const sendToLine = () => {
           <button @click="resetPrep" class="reset-btn">🔄 すべて 0 に戻す</button>
         </div>
 
-        <!-- ⭐️ 仕込み表用の確認ボタン -->
         <div class="bottom-bar">
-          <button class="confirm-btn" @click="openModal('prep')">確認画面へ進む</button>
+          <button class="confirm-btn" @click="openModal">確認画面へ進む</button>
         </div>
       </div>
 
     </div>
 
-    <!-- 確認モーダル（発注・仕込み共通） -->
+    <!-- 確認モーダル（発注・仕込み統合版） -->
     <div v-if="showModal" class="modal-overlay">
       <div class="modal-content">
-        <h2>✅ {{ activeModalType === 'order' ? '発注リストの確認' : '明日の仕込み確認' }}</h2>
-        <p class="modal-desc" v-if="activeModalType === 'order'">必要に応じて個数やグラムを入力してください</p>
+        <h2>✅ 送信内容の確認</h2>
         
         <div class="modal-list-area">
           
           <!-- 発注リスト表示用 -->
-          <template v-if="activeModalType === 'order'">
+          <div v-if="Object.keys(selectedItems).length > 0" class="modal-section">
+            <h3 class="section-title">🛒 発注リスト</h3>
+            <p class="modal-desc">必要に応じて個数やグラムを入力してください</p>
             <div v-for="(itemsObj, supplier) in selectedItems" :key="supplier" class="modal-supplier-block">
-              <h3 class="modal-supplier-name">・{{ supplier }}</h3>
+              <h4 class="modal-supplier-name">・{{ supplier }}</h4>
               <div v-for="(memo, item) in itemsObj" :key="item" class="modal-item-row">
                 <span class="modal-item-name">{{ item }}</span>
                 <input type="text" v-model="selectedItems[supplier][item]" placeholder="例: 2kg" class="modal-memo-input">
               </div>
             </div>
-          </template>
+          </div>
 
           <!-- 仕込みリスト表示用 -->
-          <template v-if="activeModalType === 'prep'">
+          <div v-if="prepItems.some(i => i.count > 0)" class="modal-section">
+            <h3 class="section-title" style="color: #ff5252;">🔪 明日の仕込みリスト</h3>
             <div v-for="item in prepItems.filter(i => i.count > 0)" :key="item.name" class="modal-item-row">
               <span class="modal-item-name" style="font-weight: bold;">・{{ item.name }}</span>
               <span class="modal-item-count" style="font-size: 18px; font-weight: bold; color: #ff5252;">{{ item.count }}</span>
             </div>
-          </template>
+          </div>
 
         </div>
         <div class="modal-actions">
           <button class="back-btn" @click="closeModal">戻る</button>
-          <button class="send-btn" @click="sendToLine">LINEに送る</button>
+          <button class="send-btn" @click="sendToLine">LINEにまとめて送る</button>
         </div>
       </div>
     </div>
@@ -313,21 +316,32 @@ const sendToLine = () => {
 .reset-area { text-align: center; margin-top: 20px; padding-bottom: 20px;}
 .reset-btn { padding: 12px 24px; background: white; color: #757575; border: 2px solid #bdbdbd; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
 
-/* ⭐️ 下部ボタンの中央寄せ設定 */
+/* 下部ボタンの中央寄せ設定 */
 .bottom-bar { 
-  position: fixed; 
-  bottom: 0; 
-  left: 0; 
-  width: 100%; 
-  padding: 16px; 
-  background-color: white; 
-  box-shadow: 0 -2px 10px rgba(0,0,0,0.1); 
+  position: fixed; bottom: 0; left: 0; width: 100%; padding: 16px; 
+  background-color: white; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); 
   z-index: 20; 
-  display: flex; 
-  justify-content: center;
-  box-sizing: border-box; /* 👈 これを追加！余白を100%の中に収める魔法 */
+  display: grid; justify-items: center; box-sizing: border-box;
 }
 .confirm-btn { width: 90%; max-width: 400px; padding: 16px; font-size: 18px; font-weight: bold; background-color: #333; color: white; border: none; border-radius: 30px; cursor: pointer; }
+
+/* 統合モーダルのデザイン */
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); display: flex; justify-content: center; align-items: center; z-index: 100; }
+.modal-content { background-color: white; width: 90%; max-width: 500px; max-height: 85vh; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; }
+.modal-list-area { overflow-y: auto; flex-grow: 1; margin-bottom: 20px; padding-right: 5px; }
+.modal-section { margin-bottom: 25px; padding-bottom: 15px; border-bottom: 2px dashed #ddd; }
+.modal-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.section-title { font-size: 18px; margin-bottom: 10px; color: #00B900; }
+.modal-desc { font-size: 14px; color: #666; margin-bottom: 16px; }
+.modal-supplier-block { margin-bottom: 16px; }
+.modal-supplier-name { font-size: 16px; font-weight: bold; margin-bottom: 8px; color: #444; margin-top: 0;}
+.modal-item-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px dashed #eee; }
+.modal-item-name { font-size: 16px; flex-grow: 1; }
+.modal-memo-input { width: 100px; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; margin-left: 10px; }
+.modal-actions { display: flex; gap: 10px; }
+.back-btn, .send-btn { flex: 1; padding: 14px; font-size: 16px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; }
+.back-btn { background-color: #eee; color: #333; }
+.send-btn { background-color: #00B900; color: white; }
 
 /* 以下既存のデザイン */
 .login-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 70vh; }
@@ -354,17 +368,4 @@ h2 { font-size: 18px; color: #333; margin: 0; }
 .add-item-btn { padding: 12px 16px; border: 1px dashed #2196F3; border-radius: 8px; background-color: #e3f2fd; color: #1976d2; font-size: 14px; cursor: pointer; font-weight: bold;}
 .add-supplier-area { text-align: center; margin-top: 20px; padding: 20px; background: #f9f9f9; border-radius: 8px; border: 2px dashed #ccc; }
 .add-supplier-btn { padding: 12px 24px; font-size: 16px; background-color: #333; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold;}
-.modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); display: flex; justify-content: center; align-items: center; z-index: 100; }
-.modal-content { background-color: white; width: 90%; max-width: 500px; max-height: 80vh; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; }
-.modal-desc { font-size: 14px; color: #666; margin-bottom: 16px; }
-.modal-list-area { overflow-y: auto; flex-grow: 1; margin-bottom: 20px; }
-.modal-supplier-block { margin-bottom: 16px; }
-.modal-supplier-name { font-size: 16px; font-weight: bold; margin-bottom: 8px; }
-.modal-item-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px dashed #eee; }
-.modal-item-name { font-size: 16px; flex-grow: 1; }
-.modal-memo-input { width: 100px; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; margin-left: 10px; }
-.modal-actions { display: flex; gap: 10px; }
-.back-btn, .send-btn { flex: 1; padding: 14px; font-size: 16px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; }
-.back-btn { background-color: #eee; color: #333; }
-.send-btn { background-color: #00B900; color: white; }
 </style>
