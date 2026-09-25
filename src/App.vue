@@ -35,10 +35,7 @@ const checkPin = () => {
 // ==========================================
 // 2. 仕入れマスターデータと状態管理
 // ==========================================
-// reactiveなデータとして管理（localStorageと連動）
 const suppliers = ref({})
-
-// 選択されたアイテム（発注用）
 const selectedItems = ref({})
 const searchQuery = ref('')
 const isEditMode = ref(false) // 編集モードのON/OFF
@@ -87,7 +84,6 @@ const isSelected = (supplier, item) => {
 // ==========================================
 // 3. アプリ内編集機能（追加・削除）
 // ==========================================
-// 業者の追加
 const addNewSupplier = () => {
   const newName = prompt('新しい業者名を入力してください:')
   if (newName && !suppliers.value[newName]) {
@@ -97,14 +93,12 @@ const addNewSupplier = () => {
   }
 }
 
-// 業者の削除
 const removeSupplier = (supplier) => {
   if (confirm(`本当に「${supplier}」を削除しますか？`)) {
     delete suppliers.value[supplier]
   }
 }
 
-// アイテムの追加
 const addNewItem = (supplier) => {
   const newItem = prompt(`「${supplier}」に追加するアイテム名:`)
   if (newItem && !suppliers.value[supplier].includes(newItem)) {
@@ -112,7 +106,6 @@ const addNewItem = (supplier) => {
   }
 }
 
-// アイテムの削除
 const removeItem = (supplier, item) => {
   if (confirm(`「${item}」を削除しますか？`)) {
     const index = suppliers.value[supplier].indexOf(item)
@@ -121,7 +114,6 @@ const removeItem = (supplier, item) => {
     }
   }
 }
-
 
 // ==========================================
 // 4. モーダルとLINE送信処理
@@ -169,25 +161,27 @@ const sendToLine = () => {
     </div>
 
     <div v-else class="main-app">
-      <div class="header-area">
-        <h1>📝 トトの仕入れ表</h1>
-        <!-- 編集モード切替トグル -->
-        <label class="edit-toggle">
-          <input type="checkbox" v-model="isEditMode">
-          <span class="toggle-label" :class="{ active: isEditMode }">
-            {{ isEditMode ? '🛠️ 編集モードON' : '発注モード' }}
-          </span>
-        </label>
+      <!-- 上部固定エリア -->
+      <div class="sticky-header">
+        <div class="header-area">
+          <h1>📝 トトの仕入れ表</h1>
+          <label class="edit-toggle">
+            <input type="checkbox" v-model="isEditMode">
+            <span class="toggle-label" :class="{ active: isEditMode }">
+              {{ isEditMode ? '🛠️ 編集モードON' : '発注モード' }}
+            </span>
+          </label>
+        </div>
+        
+        <div class="search-box" v-if="!isEditMode">
+          <input type="text" v-model="searchQuery" placeholder="🔍 アイテム名で検索..." class="search-input">
+        </div>
       </div>
       
-      <div class="search-box" v-if="!isEditMode">
-        <input type="text" v-model="searchQuery" placeholder="🔍 アイテム名で検索..." class="search-input">
-      </div>
-      
+      <!-- 業者リスト -->
       <div v-for="(items, supplier) in filteredSuppliers" :key="supplier" class="supplier-block">
         <div class="supplier-header">
           <h2>{{ supplier }}</h2>
-          <!-- 編集モード時：業者削除ボタン -->
           <button v-if="isEditMode" @click="removeSupplier(supplier)" class="delete-supplier-btn">業者を削除</button>
         </div>
         
@@ -200,21 +194,17 @@ const sendToLine = () => {
             >
               {{ item }}
             </button>
-            <!-- 編集モード時：アイテム削除ボタン -->
             <button v-if="isEditMode" @click="removeItem(supplier, item)" class="delete-item-btn">×</button>
           </div>
           
-          <!-- 編集モード時：アイテム追加ボタン -->
           <button v-if="isEditMode" @click="addNewItem(supplier)" class="add-item-btn">＋ 追加</button>
         </div>
       </div>
       
-      <!-- 編集モード時：業者追加ボタン -->
       <div v-if="isEditMode" class="add-supplier-area">
         <button @click="addNewSupplier" class="add-supplier-btn">＋ 新しい業者を追加</button>
       </div>
 
-      <!-- 発注モード時のみ表示する下部ボタン -->
       <div class="bottom-bar" v-if="!isEditMode">
         <button class="confirm-btn" @click="openModal">確認画面へ進む</button>
       </div>
@@ -252,8 +242,19 @@ const sendToLine = () => {
 .pin-input { font-size: 24px; padding: 10px; margin: 20px 0; width: 220px; text-align: center; border: 2px solid #ccc; border-radius: 8px; }
 .unlock-btn { padding: 12px 30px; font-size: 18px; background-color: #333; color: white; border: none; border-radius: 8px; cursor: pointer; }
 
+/* 上部固定エリア */
+.sticky-header {
+  position: sticky;
+  top: 0;
+  background-color: white;
+  z-index: 50;
+  padding: 10px 0 15px 0;
+  border-bottom: 2px solid #f0f0f0;
+  margin-bottom: 20px;
+}
+
 /* ヘッダー・トグル */
-.header-area { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+.header-area { display: flex; justify-content: space-between; align-items: center; }
 h1 { font-size: 22px; margin: 0; }
 .edit-toggle input { display: none; }
 .toggle-label { 
@@ -263,7 +264,7 @@ h1 { font-size: 22px; margin: 0; }
 .toggle-label.active { background: #ffebee; border-color: #f44336; color: #d32f2f; }
 
 /* 検索 */
-.search-box { margin-bottom: 20px; position: sticky; top: 0; background-color: white; padding: 10px 0; z-index: 10; }
+.search-box { margin-top: 15px; }
 .search-input { width: 100%; padding: 12px; font-size: 16px; border: 2px solid #ddd; border-radius: 8px; box-sizing: border-box; }
 
 /* メインリスト */
