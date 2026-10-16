@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { suppliersData } from './data/suppliers'
 import { db } from './firebase'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
@@ -61,6 +61,7 @@ const searchQuery = ref('')
 const isEditMode = ref(false)
 const showModal = ref(false)
 const sendMode = ref('separate')
+const isSaving = ref(false) // 保存中表示用
 
 // ==========================================
 // 2. Firebaseからデータ読み込み (onMounted)
@@ -68,29 +69,35 @@ const sendMode = ref('separate')
 onMounted(async () => {
   if (localStorage.getItem('totoAppUnlocked') === 'true') isUnlocked.value = true
   
-  const s1Ref = doc(db, 'toto_stores', 'store1')
-  const s1Snap = await getDoc(s1Ref)
-  if (s1Snap.exists()) {
-    store1Suppliers.value = s1Snap.data().suppliers || {}
-    store1Selected.value = s1Snap.data().selected || {}
-    store1Prep.value = (s1Snap.data().prep || store1Prep.value).map(i => ({
-      ...i,
-      tags: i.tags || (i.tag ? [i.tag] : ['C']) // 旧データの互換性対応
-    }))
-  } else {
-    store1Suppliers.value = JSON.parse(JSON.stringify(suppliersData))
-  }
+  try {
+    const s1Ref = doc(db, 'toto_stores', 'store1')
+    const s1Snap = await getDoc(s1Ref)
+    if (s1Snap.exists()) {
+      store1Suppliers.value = s1Snap.data().suppliers || {}
+      store1Selected.value = s1Snap.data().selected || {}
+      store1Prep.value = (s1Snap.data().prep || store1Prep.value).map(i => ({
+        ...i,
+        tags: i.tags || (i.tag ? [i.tag] : ['C'])
+      }))
+    } else {
+      store1Suppliers.value = JSON.parse(JSON.stringify(suppliersData))
+    }
 
-  const s2Ref = doc(db, 'toto_stores', 'store2')
-  const s2Snap = await getDoc(s2Ref)
-  if (s2Snap.exists()) {
-    store2Suppliers.value = s2Snap.data().suppliers || {}
-    store2Selected.value = s2Snap.data().selected || {}
-    store2Prep.value = (s2Snap.data().prep || store2Prep.value).map(i => ({
-      ...i,
-      tags: i.tags || (i.tag ? [i.tag] : ['C'])
-    }))
-  } else {
+    const s2Ref = doc(db, 'toto_stores', 'store2')
+    const s2Snap = await getDoc(s2Ref)
+    if (s2Snap.exists()) {
+      store2Suppliers.value = s2Snap.data().suppliers || {}
+      store2Selected.value = s2Snap.data().selected || {}
+      store2Prep.value = (s2Snap.data().prep || store2Prep.value).map(i => ({
+        ...i,
+        tags: i.tags || (i.tag ? [i.tag] : ['C'])
+      }))
+    } else {
+      store2Suppliers.value = JSON.parse(JSON.stringify(suppliersData))
+    }
+  } catch (e) {
+    console.error('データ読み込みエラー:', e)
+    store1Suppliers.value = JSON.parse(JSON.stringify(suppliersData))
     store2Suppliers.value = JSON.parse(JSON.stringify(suppliersData))
   }
 })
@@ -106,23 +113,33 @@ const checkPin = () => {
 }
 
 // ==========================================
-// 3. データ変更時の自動保存 (Firebase Watcher)
+// 3. 手動「一時保存」関数（ここで初めてクラウドに保存！）
 // ==========================================
-watch([store1Suppliers, store1Selected, store1Prep], async () => {
-  await setDoc(doc(db, 'toto_stores', 'store1'), { 
-    suppliers: store1Suppliers.value, 
-    selected: store1Selected.value, 
-    prep: store1Prep.value 
-  }, { merge: true })
-}, { deep: true })
+const saveCurrentData = async () => {
+  isSaving.value = true
+  try {
+    // 1号店データを保存
+    await setDoc(doc(db, 'toto_stores', 'store1'), { 
+      suppliers: store1Suppliers.value, 
+      selected: store1Selected.value, 
+      prep: store1Prep.value 
+    }, { merge: true })
 
-watch([store2Suppliers, store2Selected, store2Prep], async () => {
-  await setDoc(doc(db, 'toto_stores', 'store2'), { 
-    suppliers: store2Suppliers.value, 
-    selected: store2Selected.value, 
-    prep: store2Prep.value 
-  }, { merge: true })
-}, { deep: true })
+    // 2号店データを保存
+    await setDoc(doc(db, 'toto_stores', 'store2'), { 
+      suppliers: store2Suppliers.value, 
+      selected: store2Selected.value, 
+      prep: store2Prep.value 
+    }, { merge: true })
+
+    alert('💾 一時保存しました！')
+  } catch (e) {
+    console.error('保存エラー:', e)
+    alert('保存に失敗しました。接続を確認してください。')
+  } finally {
+    isSaving.value = false
+  }
+}
 
 // ==========================================
 // 4. 操作用関数
@@ -188,15 +205,13 @@ const removeItem = (supplier, item) => {
   }
 }
 
-// 複数選択用タグのトグル関数
 const toggleTag = (item, tag) => {
   if (!item.tags) item.tags = []
   const index = item.tags.indexOf(tag)
   if (index > -1) {
-    item.tags.splice(index, 1) // 既に含まれていれば外す
+    item.tags.splice(index, 1)
   } else {
-    item.tags.push(tag) // 含まれていなければ追加
-    // 綺麗な順番（C, 洗, P）に並び替え
+    item.tags.push(tag)
     const order = { 'C': 1, '洗': 2, 'P': 3 }
     item.tags.sort((a, b) => (order[a] || 99) - (order[b] || 99))
   }
@@ -216,7 +231,8 @@ const removePrepItem = (index) => {
   }
 }
 
-const openModal = () => {
+// 確認画面へ進むときに、念のため自動で一時保存を走らせる（またはそのまま確認）
+const openModal = async () => {
   const hasOrder1 = Object.keys(store1Selected.value).length > 0
   const hasOrder2 = Object.keys(store2Selected.value).length > 0
   const hasPrep1 = store1Prep.value.some(i => i.count > 0)
@@ -225,6 +241,9 @@ const openModal = () => {
   if (!hasOrder1 && !hasOrder2 && !hasPrep1 && !hasPrep2) {
     return alert('両店舗あわせて発注または仕込みのデータがありません！')
   }
+
+  // 確認画面を開くタイミングで自動保存も実行
+  await saveCurrentData()
   showModal.value = true
 }
 
@@ -323,10 +342,15 @@ const sendToLine = () => {
 
     <div v-else class="main-app">
       
-      <!-- 店舗切り替えスイッチ -->
-      <div class="store-switcher">
-        <button :class="{ active: currentStore === 'store1' }" @click="currentStore = 'store1'">🏠 1号店</button>
-        <button :class="{ active: currentStore === 'store2' }" @click="currentStore = 'store2'">🏢 2号店</button>
+      <!-- ヘルパー上部：店舗切り替え ＆ 一時保存ボタン -->
+      <div class="top-control-bar">
+        <div class="store-switcher">
+          <button :class="{ active: currentStore === 'store1' }" @click="currentStore = 'store1'">🏠 1号店</button>
+          <button :class="{ active: currentStore === 'store2' }" @click="currentStore = 'store2'">🏢 2号店</button>
+        </div>
+        <button class="save-action-btn" @click="saveCurrentData" :disabled="isSaving">
+          {{ isSaving ? '保存中...' : '💾 一時保存' }}
+        </button>
       </div>
 
       <!-- タブ切り替えボタン -->
@@ -389,7 +413,6 @@ const sendToLine = () => {
           <div v-for="(item, index) in prepItems" :key="item.name" class="prep-item" :class="{ 'is-active': item.count > 0 }">
             <div class="prep-info">
               <span class="prep-name">{{ item.name }}</span>
-              <!-- ⭐️ 複数選択可能なタグ切り替えボタン -->
               <div class="tag-selector" v-if="!isEditMode">
                 <button 
                   v-for="t in ['C', '洗', 'P']" 
@@ -499,10 +522,13 @@ const sendToLine = () => {
 <style scoped>
 .app-container { padding: 20px; font-family: sans-serif; padding-bottom: 100px; }
 
-/* 店舗切り替えスイッチ */
-.store-switcher { display: flex; margin-bottom: 10px; border-radius: 8px; overflow: hidden; border: 2px solid #00B900; }
+/* 上部コントロール（店舗切り替え ＆ 一時保存ボタン） */
+.top-control-bar { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+.store-switcher { display: flex; flex: 1; border-radius: 8px; overflow: hidden; border: 2px solid #00B900; }
 .store-switcher button { flex: 1; padding: 12px; font-size: 16px; font-weight: bold; background: white; border: none; cursor: pointer; color: #00B900; transition: background 0.2s;}
 .store-switcher button.active { background: #00B900; color: white; }
+.save-action-btn { padding: 12px 16px; font-size: 15px; font-weight: bold; background: #2196F3; color: white; border: none; border-radius: 8px; cursor: pointer; white-space: nowrap; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.save-action-btn:active { background: #1976D2; }
 
 /* タブデザイン */
 .tab-nav { display: flex; margin-bottom: 15px; border-radius: 8px; overflow: hidden; border: 2px solid #ddd; }
@@ -540,9 +566,9 @@ const sendToLine = () => {
 /* モーダル */
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); display: flex; justify-content: center; align-items: center; z-index: 100; }
 .modal-content { background-color: white; width: 90%; max-width: 500px; max-height: 85vh; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; }
-.send-mode-switch { display: flex; margin: 15px 0px; height: 100px; border-radius: 6px; overflow: hidden; border: 2px solid #00B900; background: #fff; }
-.send-mode-switch button { flex: 1; padding: 12px 8px; font-size: 13px; font-weight: bold; background: white; border: none; cursor: pointer; color: #00B900; text-align: center; line-height: 1.4;}
-.send-mode-switch button.active { background: #00B900; color: #ffffff !important; }
+.send-mode-switch { display: flex; margin: 15px 0px; height: 46px; border-radius: 6px; overflow: hidden; border: 2px solid #00B900; background: #fff; box-sizing: border-box; }
+.send-mode-switch button { flex: 1; height: 100%; padding: 0 4px; font-size: 13px; font-weight: bold; background: white; border: none; cursor: pointer; color: #00B900; display: flex; align-items: center; justify-content: center; text-align: center; }
+.send-mode-switch button.active { background: #00B900 !important; color: #ffffff !important; }
 
 .modal-list-area { overflow-y: auto; flex-grow: 1; margin-bottom: 20px; padding-right: 5px; }
 .store-preview-block { background: #f9f9f9; padding: 12px; border-radius: 8px; border: 1px solid #eee; }
@@ -561,8 +587,11 @@ const sendToLine = () => {
 .pin-input { font-size: 24px; padding: 10px; margin: 20px 0; width: 220px; text-align: center; border: 2px solid #ccc; border-radius: 8px; }
 .unlock-btn { padding: 12px 30px; font-size: 18px; background: #333; color: white; border: none; border-radius: 8px; cursor: pointer; }
 .sticky-header { position: sticky; top: 0; background-color: white; z-index: 50; padding: 10px 0 15px 0; border-bottom: 2px solid #f0f0f0; margin-bottom: 20px; }
-.header-area { display: flex; justify-content: space-between; align-items: center; }
+.header-area { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 h1 { font-size: 22px; margin: 0; }
+
+/* ⭐️ 発注モードのスイッチを右端に寄せる設定 */
+.edit-toggle { margin-left: auto; display: flex; align-items: center; }
 .edit-toggle input { display: none; }
 .toggle-label { background: #eee; padding: 8px 12px; border-radius: 20px; font-size: 14px; cursor: pointer; font-weight: bold; border: 2px solid #ccc; color: #666; }
 .toggle-label.active { background: #ffebee; border-color: #f44336; color: #d32f2f; }
