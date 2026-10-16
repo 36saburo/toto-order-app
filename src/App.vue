@@ -1,11 +1,14 @@
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
 import { suppliersData } from './data/suppliers'
+// ⭐️ 新規追加：Firebaseの設定を読み込む
+import { db } from './firebase'
+import { doc, getDoc, setDoc } from 'firebase/firestore'
 
 // ==========================================
 // 0. タブ切り替えとパスワード設定
 // ==========================================
-const activeTab = ref('order') // 'order'=仕入れ, 'prep'=仕込み
+const activeTab = ref('order')
 const isUnlocked = ref(false)
 const pinCode = ref('')
 const correctPin = '1129'
@@ -38,30 +41,28 @@ const suppliers = ref({})
 const selectedItems = ref({})
 const searchQuery = ref('')
 const isEditMode = ref(false)
-
-// モーダルの状態管理（統合版）
 const showModal = ref(false)
 
 // ==========================================
-// 3. データ保存と初期化 (onMounted / watch)
+// 3. データ保存と初期化 (Firebase クラウド連携版)
 // ==========================================
-onMounted(() => {
+onMounted(async () => {
   if (localStorage.getItem('totoAppUnlocked') === 'true') isUnlocked.value = true
   
-  const savedSuppliers = localStorage.getItem('totoSuppliers')
-  if (savedSuppliers) {
-    suppliers.value = JSON.parse(savedSuppliers)
+  // ⭐️ Firebaseから仕入れデータを取得
+  const suppRef = doc(db, 'toto_data', 'suppliers')
+  const suppSnap = await getDoc(suppRef)
+  if (suppSnap.exists()) {
+    suppliers.value = suppSnap.data().items
   } else {
     suppliers.value = JSON.parse(JSON.stringify(suppliersData))
   }
   
-  const savedPrep = localStorage.getItem('totoPrep')
-  if (savedPrep) {
-    const parsed = JSON.parse(savedPrep)
-    prepItems.value = parsed.map(p => ({
-      name: p.name,
-      count: p.count || 0 
-    }))
+  // ⭐️ Firebaseから仕込みデータを取得
+  const prepRef = doc(db, 'toto_data', 'prep')
+  const prepSnap = await getDoc(prepRef)
+  if (prepSnap.exists()) {
+    prepItems.value = prepSnap.data().items
   }
 })
 
@@ -75,8 +76,14 @@ const checkPin = () => {
   }
 }
 
-watch(suppliers, (newVal) => { localStorage.setItem('totoSuppliers', JSON.stringify(newVal)) }, { deep: true })
-watch(prepItems, (newVal) => { localStorage.setItem('totoPrep', JSON.stringify(newVal)) }, { deep: true })
+// ⭐️ データが変わるたびにFirebaseに自動保存
+watch(suppliers, async (newVal) => { 
+  await setDoc(doc(db, 'toto_data', 'suppliers'), { items: newVal }) 
+}, { deep: true })
+
+watch(prepItems, async (newVal) => { 
+  await setDoc(doc(db, 'toto_data', 'prep'), { items: newVal }) 
+}, { deep: true })
 
 // ==========================================
 // 4. 仕入れ用関数
@@ -121,16 +128,13 @@ const removeItem = (supplier, item) => {
 }
 
 // ==========================================
-// 5. モーダルとLINE送信処理（統合版）
+// 5. モーダルとLINE送信処理
 // ==========================================
 const openModal = () => {
   const hasOrder = Object.keys(selectedItems.value).length > 0
   const hasPrep = prepItems.value.some(item => item.count > 0)
   
-  if (!hasOrder && !hasPrep) {
-    return alert('発注または仕込みのデータがありません！')
-  }
-  
+  if (!hasOrder && !hasPrep) return alert('発注または仕込みのデータがありません！')
   showModal.value = true
 }
 
@@ -139,7 +143,6 @@ const closeModal = () => showModal.value = false
 const sendToLine = () => {
   let message = '【本日の業務連絡】\n\n'
   
-  // 発注リストの追加
   if (Object.keys(selectedItems.value).length > 0) {
     message += '🛒 発注リスト\n'
     for (const [supplier, itemsObj] of Object.entries(selectedItems.value)) {
@@ -151,13 +154,10 @@ const sendToLine = () => {
     }
   }
 
-  // 仕込みリストの追加
   const activePreps = prepItems.value.filter(item => item.count > 0)
   if (activePreps.length > 0) {
     message += '🔪 明日の仕込みリスト\n'
-    activePreps.forEach(item => {
-      message += `・${item.name}： ${item.count}\n`
-    })
+    activePreps.forEach(item => { message += `・${item.name}： ${item.count}\n` })
   }
 
   window.location.href = `https://line.me/R/msg/text/?${encodeURIComponent(message)}`
@@ -173,16 +173,12 @@ const sendToLine = () => {
     </div>
 
     <div v-else class="main-app">
-      
-      <!-- タブ切り替えボタン -->
       <div class="tab-nav">
         <button :class="{ active: activeTab === 'order' }" @click="activeTab = 'order'">🛒 仕入れ表</button>
         <button :class="{ active: activeTab === 'prep' }" @click="activeTab = 'prep'">🔪 仕込み表</button>
       </div>
 
-      <!-- ========================================= -->
       <!-- 画面A：仕入れ表 -->
-      <!-- ========================================= -->
       <div v-if="activeTab === 'order'">
         <div class="sticky-header">
           <div class="header-area">
@@ -204,36 +200,28 @@ const sendToLine = () => {
           </div>
           <div class="item-grid">
             <div v-for="item in items" :key="item" class="item-wrapper">
-              <button class="item-btn" :class="{ 'is-active': isSelected(supplier, item), 'is-edit': isEditMode }" @click="toggleItem(supplier, item)">
-                {{ item }}
-              </button>
+              <button class="item-btn" :class="{ 'is-active': isSelected(supplier, item), 'is-edit': isEditMode }" @click="toggleItem(supplier, item)">{{ item }}</button>
               <button v-if="isEditMode" @click="removeItem(supplier, item)" class="delete-item-btn">×</button>
             </div>
             <button v-if="isEditMode" @click="addNewItem(supplier)" class="add-item-btn">＋ 追加</button>
           </div>
         </div>
-        
         <div v-if="isEditMode" class="add-supplier-area">
           <button @click="addNewSupplier" class="add-supplier-btn">＋ 新しい業者を追加</button>
         </div>
-
         <div class="bottom-bar" v-if="!isEditMode">
           <button class="confirm-btn" @click="openModal">確認画面へ進む</button>
         </div>
       </div>
 
-      <!-- ========================================= -->
       <!-- 画面B：明日の仕込み表 -->
-      <!-- ========================================= -->
       <div v-if="activeTab === 'prep'">
         <div class="sticky-header">
           <h1>🔪 明日の仕込みリスト</h1>
         </div>
-
         <div class="prep-list">
           <div v-for="item in prepItems" :key="item.name" class="prep-item" :class="{ 'is-active': item.count > 0 }">
             <span class="prep-name">{{ item.name }}</span>
-            
             <div class="counter-box">
               <button class="count-btn minus" @click="item.count > 0 ? item.count-- : null" :disabled="item.count === 0">－</button>
               <span class="count-display">{{ item.count }}</span>
@@ -241,26 +229,20 @@ const sendToLine = () => {
             </div>
           </div>
         </div>
-
         <div class="reset-area">
           <button @click="resetPrep" class="reset-btn">🔄 すべて 0 に戻す</button>
         </div>
-
         <div class="bottom-bar">
           <button class="confirm-btn" @click="openModal">確認画面へ進む</button>
         </div>
       </div>
-
     </div>
 
-    <!-- 確認モーダル（発注・仕込み統合版） -->
+    <!-- 確認モーダル -->
     <div v-if="showModal" class="modal-overlay">
       <div class="modal-content">
         <h2>✅ 送信内容の確認</h2>
-        
         <div class="modal-list-area">
-          
-          <!-- 発注リスト表示用 -->
           <div v-if="Object.keys(selectedItems).length > 0" class="modal-section">
             <h3 class="section-title">🛒 発注リスト</h3>
             <p class="modal-desc">必要に応じて個数やグラムを入力してください</p>
@@ -272,8 +254,6 @@ const sendToLine = () => {
               </div>
             </div>
           </div>
-
-          <!-- 仕込みリスト表示用 -->
           <div v-if="prepItems.some(i => i.count > 0)" class="modal-section">
             <h3 class="section-title" style="color: #ff5252;">🔪 明日の仕込みリスト</h3>
             <div v-for="item in prepItems.filter(i => i.count > 0)" :key="item.name" class="modal-item-row">
@@ -281,7 +261,6 @@ const sendToLine = () => {
               <span class="modal-item-count" style="font-size: 18px; font-weight: bold; color: #ff5252;">{{ item.count }}</span>
             </div>
           </div>
-
         </div>
         <div class="modal-actions">
           <button class="back-btn" @click="closeModal">戻る</button>
@@ -294,38 +273,23 @@ const sendToLine = () => {
 
 <style scoped>
 .app-container { padding: 20px; font-family: sans-serif; padding-bottom: 100px; }
-
-/* タブデザイン */
 .tab-nav { display: flex; margin-bottom: 15px; border-radius: 8px; overflow: hidden; border: 2px solid #ddd; }
 .tab-nav button { flex: 1; padding: 15px; font-size: 16px; font-weight: bold; background: #f9f9f9; border: none; cursor: pointer; color: #666; transition: background 0.2s;}
 .tab-nav button.active { background: #333; color: white; }
-
-/* 仕込み表デザイン（カウンター式） */
 .prep-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 30px; }
 .prep-item { display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; background: #f9f9f9; border: 2px solid #eee; border-radius: 8px; transition: all 0.2s; }
 .prep-item.is-active { background: #fffde7; border-color: #ffeb3b; }
 .prep-name { font-size: 18px; font-weight: bold; color: #333; }
-
 .counter-box { display: flex; align-items: center; gap: 15px; }
 .count-btn { width: 44px; height: 44px; font-size: 24px; font-weight: bold; border-radius: 50%; border: none; cursor: pointer; display: flex; justify-content: center; align-items: center; transition: background 0.2s; }
 .count-btn.minus { background: #eeeeee; color: #757575; }
 .count-btn.minus:disabled { opacity: 0.3; cursor: default; }
 .count-btn.plus { background: #ff5252; color: white; }
 .count-display { font-size: 22px; font-weight: bold; width: 30px; text-align: center; }
-
 .reset-area { text-align: center; margin-top: 20px; padding-bottom: 20px;}
 .reset-btn { padding: 12px 24px; background: white; color: #757575; border: 2px solid #bdbdbd; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-
-/* 下部ボタンの中央寄せ設定 */
-.bottom-bar { 
-  position: fixed; bottom: 0; left: 0; width: 100%; padding: 16px; 
-  background-color: white; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); 
-  z-index: 20; 
-  display: grid; justify-items: center; box-sizing: border-box;
-}
+.bottom-bar { position: fixed; bottom: 0; left: 0; width: 100%; padding: 16px; background-color: white; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 20; display: grid; justify-items: center; box-sizing: border-box;}
 .confirm-btn { width: 90%; max-width: 400px; padding: 16px; font-size: 18px; font-weight: bold; background-color: #333; color: white; border: none; border-radius: 30px; cursor: pointer; }
-
-/* 統合モーダルのデザイン */
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.6); display: flex; justify-content: center; align-items: center; z-index: 100; }
 .modal-content { background-color: white; width: 90%; max-width: 500px; max-height: 85vh; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; }
 .modal-list-area { overflow-y: auto; flex-grow: 1; margin-bottom: 20px; padding-right: 5px; }
@@ -342,8 +306,6 @@ const sendToLine = () => {
 .back-btn, .send-btn { flex: 1; padding: 14px; font-size: 16px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; }
 .back-btn { background-color: #eee; color: #333; }
 .send-btn { background-color: #00B900; color: white; }
-
-/* 以下既存のデザイン */
 .login-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 70vh; }
 .pin-input { font-size: 24px; padding: 10px; margin: 20px 0; width: 220px; text-align: center; border: 2px solid #ccc; border-radius: 8px; }
 .unlock-btn { padding: 12px 30px; font-size: 18px; background: #333; color: white; border: none; border-radius: 8px; cursor: pointer; }
