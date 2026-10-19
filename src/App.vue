@@ -145,34 +145,68 @@ const updateOrderCount = (supplier, item, delta) => {
   }
 }
 
+// 
 const addNewSupplier = () => {
   const newName = prompt('新しい業者名を入力してください:')
-  if (newName && !suppliers.value[newName]) suppliers.value = { ...suppliers.value, [newName]: [] }
+  if (newName) {
+    if (!store1Suppliers.value[newName]) store1Suppliers.value = { ...store1Suppliers.value, [newName]: [] }
+    if (!store2Suppliers.value[newName]) store2Suppliers.value = { ...store2Suppliers.value, [newName]: [] }
+  }
 }
 const removeSupplier = (supplier) => {
-  if (confirm(`本当に「${supplier}」を削除しますか？`)) { const updated = { ...suppliers.value }; delete updated[supplier]; suppliers.value = updated }
+  if (confirm(`本当に「${supplier}」を削除しますか？`)) { 
+    const updated1 = { ...store1Suppliers.value }; delete updated1[supplier]; store1Suppliers.value = updated1;
+    const updated2 = { ...store2Suppliers.value }; delete updated2[supplier]; store2Suppliers.value = updated2;
+  }
 }
 const addNewItem = (supplier) => {
   const newItem = prompt(`「${supplier}」に追加するアイテム名:`)
-  if (newItem && !suppliers.value[supplier].includes(newItem)) { const updated = { ...suppliers.value }; updated[supplier] = [...updated[supplier], newItem]; suppliers.value = updated }
+  if (newItem) {
+    if (store1Suppliers.value[supplier] && !store1Suppliers.value[supplier].includes(newItem)) { 
+      const updated1 = { ...store1Suppliers.value }; updated1[supplier] = [...updated1[supplier], newItem]; store1Suppliers.value = updated1;
+    }
+    if (store2Suppliers.value[supplier] && !store2Suppliers.value[supplier].includes(newItem)) { 
+      const updated2 = { ...store2Suppliers.value }; updated2[supplier] = [...updated2[supplier], newItem]; store2Suppliers.value = updated2;
+    }
+  }
 }
 const removeItem = (supplier, item) => {
-  if (confirm(`「${item}」を削除しますか？`)) { const updated = { ...suppliers.value }; updated[supplier] = updated[supplier].filter(i => i !== item); suppliers.value = updated }
+  if (confirm(`「${item}」を削除しますか？`)) { 
+    const updated1 = { ...store1Suppliers.value }; updated1[supplier] = updated1[supplier].filter(i => i !== item); store1Suppliers.value = updated1;
+    const updated2 = { ...store2Suppliers.value }; updated2[supplier] = updated2[supplier].filter(i => i !== item); store2Suppliers.value = updated2;
+  }
 }
 
 // === PrepTab用関数 ===
 const toggleTag = (item, tag) => {
-  if (!item.tags) item.tags = []
-  const index = item.tags.indexOf(tag)
-  if (index > -1) item.tags.splice(index, 1)
-  else { item.tags.push(tag); const order = { 'C': 1, '洗': 2, 'P': 3 }; item.tags.sort((a, b) => (order[a] || 99) - (order[b] || 99)) }
+  // ⭐️ タグ（C/洗/P）の変更も両店舗に反映させます
+  const targetName = item.name;
+  [store1Prep.value, store2Prep.value].forEach(prepList => {
+    const targetItem = prepList.find(i => i.name === targetName)
+    if (targetItem) {
+      if (!targetItem.tags) targetItem.tags = []
+      const index = targetItem.tags.indexOf(tag)
+      if (index > -1) targetItem.tags.splice(index, 1)
+      else { 
+        targetItem.tags.push(tag); 
+        const order = { 'C': 1, '洗': 2, 'P': 3 }; 
+        targetItem.tags.sort((a, b) => (order[a] || 99) - (order[b] || 99)) 
+      }
+    }
+  })
 }
 const addNewPrepItem = () => {
   const name = prompt('追加する仕込みアイテム名:')
-  if (name) prepItems.value = [...prepItems.value, { name, count: 0, tags: ['C'] }]
+  if (name) {
+    store1Prep.value = [...store1Prep.value, { name, count: 0, tags: ['C'] }]
+    store2Prep.value = [...store2Prep.value, { name, count: 0, tags: ['C'] }]
+  }
 }
 const removePrepItem = (index) => {
-  if (confirm('この仕込み項目を削除しますか？')) { const updated = [...prepItems.value]; updated.splice(index, 1); prepItems.value = updated }
+  if (confirm('この仕込み項目を削除しますか？')) { 
+    const updated1 = [...store1Prep.value]; updated1.splice(index, 1); store1Prep.value = updated1;
+    const updated2 = [...store2Prep.value]; updated2.splice(index, 1); store2Prep.value = updated2;
+  }
 }
 const resetPrep = () => {
   if (confirm(`【${currentStore.value === 'store1' ? '1号店' : '2号店'}】の仕込みカウントをすべて 0 にリセットしますか？`)) prepItems.value.forEach(item => item.count = 0)
