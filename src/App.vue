@@ -113,19 +113,17 @@ const checkPin = () => {
 }
 
 // ==========================================
-// 3. 手動「一時保存」関数（ここで初めてクラウドに保存！）
+// 3. 手動「一時保存」関数
 // ==========================================
 const saveCurrentData = async () => {
   isSaving.value = true
   try {
-    // 1号店データを保存
     await setDoc(doc(db, 'toto_stores', 'store1'), { 
       suppliers: store1Suppliers.value, 
       selected: store1Selected.value, 
       prep: store1Prep.value 
     }, { merge: true })
 
-    // 2号店データを保存
     await setDoc(doc(db, 'toto_stores', 'store2'), { 
       suppliers: store2Suppliers.value, 
       selected: store2Selected.value, 
@@ -150,15 +148,36 @@ const resetPrep = () => {
   }
 }
 
+// ⭐️ 常に suppliersData の順序をマスターとして整列する
 const filteredSuppliers = computed(() => {
   const currentSuppliers = suppliers.value
-  if (!searchQuery.value) return currentSuppliers
-  const filtered = {}
-  for (const [supplier, items] of Object.entries(currentSuppliers)) {
-    const matchedItems = items.filter(item => item.includes(searchQuery.value) || supplier.includes(searchQuery.value))
-    if (matchedItems.length > 0) filtered[supplier] = matchedItems
-  }
-  return filtered
+  const query = searchQuery.value.toLowerCase()
+  const masterKeys = Object.keys(suppliersData) // 元データの順番を取得
+  const resultArr = []
+
+  // 1. マスターにある業者を元の順番どおりに追加
+  masterKeys.forEach(supplier => {
+    if (currentSuppliers[supplier]) {
+      const items = currentSuppliers[supplier]
+      const matchedItems = query 
+        ? items.filter(item => item.toLowerCase().includes(query) || supplier.toLowerCase().includes(query))
+        : items
+      if (matchedItems.length > 0) resultArr.push({ supplier, items: matchedItems })
+    }
+  })
+
+  // 2. アプリ上で新しく追加された業者（マスターにないもの）を一番下に追加
+  Object.keys(currentSuppliers).forEach(supplier => {
+    if (!masterKeys.includes(supplier)) {
+      const items = currentSuppliers[supplier]
+      const matchedItems = query 
+        ? items.filter(item => item.toLowerCase().includes(query) || supplier.toLowerCase().includes(query))
+        : items
+      if (matchedItems.length > 0) resultArr.push({ supplier, items: matchedItems })
+    }
+  })
+
+  return resultArr
 })
 
 const toggleItem = (supplier, item) => {
@@ -231,7 +250,6 @@ const removePrepItem = (index) => {
   }
 }
 
-// 確認画面へ進むときに、念のため自動で一時保存を走らせる（またはそのまま確認）
 const openModal = async () => {
   const hasOrder1 = Object.keys(store1Selected.value).length > 0
   const hasOrder2 = Object.keys(store2Selected.value).length > 0
@@ -242,7 +260,6 @@ const openModal = async () => {
     return alert('両店舗あわせて発注または仕込みのデータがありません！')
   }
 
-  // 確認画面を開くタイミングで自動保存も実行
   await saveCurrentData()
   showModal.value = true
 }
@@ -262,7 +279,8 @@ const sendToLine = () => {
       for (const [supplier, itemsObj] of Object.entries(store1Selected.value)) {
         message += `［${supplier}］\n`
         for (const [item, memo] of Object.entries(itemsObj)) {
-          message += memo.trim() !== '' ? `・${item} （${memo}）\n` : `・${item}\n`
+          const memoText = memo ? String(memo).trim() : ''
+          message += memoText !== '' ? `・${item} （${memoText}）\n` : `・${item}\n`
         }
       }
     }
@@ -279,7 +297,8 @@ const sendToLine = () => {
       for (const [supplier, itemsObj] of Object.entries(store2Selected.value)) {
         message += `［${supplier}］\n`
         for (const [item, memo] of Object.entries(itemsObj)) {
-          message += memo.trim() !== '' ? `・${item} （${memo}）\n` : `・${item}\n`
+          const memoText = memo ? String(memo).trim() : ''
+          message += memoText !== '' ? `・${item} （${memoText}）\n` : `・${item}\n`
         }
       }
     }
@@ -291,17 +310,22 @@ const sendToLine = () => {
       })
     }
   } else {
+    // 合算モード：裏でエラーが起きないよう安全な記述
     message += '--- 🛒 全店舗 合算発注リスト ---\n'
     const mergedOrders = {}
-    [store1Selected.value, store2Selected.value].forEach(orderObj => {
+    
+    ;[store1Selected.value, store2Selected.value].forEach(orderObj => {
+      if (!orderObj) return
       for (const [supplier, itemsObj] of Object.entries(orderObj)) {
         if (!mergedOrders[supplier]) mergedOrders[supplier] = {}
         for (const [item, memo] of Object.entries(itemsObj)) {
           if (!mergedOrders[supplier][item]) mergedOrders[supplier][item] = []
-          if (memo.trim() !== '') mergedOrders[supplier][item].push(memo)
+          const memoText = memo ? String(memo).trim() : ''
+          if (memoText !== '') mergedOrders[supplier][item].push(memoText)
         }
       }
     })
+    
     for (const [supplier, itemsObj] of Object.entries(mergedOrders)) {
       message += `［${supplier}］\n`
       for (const [item, memos] of Object.entries(itemsObj)) {
@@ -312,16 +336,20 @@ const sendToLine = () => {
 
     message += '\n--- 🔪 全店舗 合算仕込みリスト ---\n'
     const mergedPrep = {}
-    [store1Prep.value, store2Prep.value].forEach(prepList => {
+    
+    ;[store1Prep.value, store2Prep.value].forEach(prepList => {
+      if (!prepList) return
       prepList.forEach(i => { 
         if (i.count > 0) {
-          const tagsKey = i.tags ? [...i.tags].sort().join(',') : 'C'
+          const tagsArr = Array.isArray(i.tags) ? i.tags : (i.tag ? [i.tag] : ['C'])
+          const tagsKey = [...tagsArr].sort().join(',')
           const key = `${i.name}_${tagsKey}`
-          if (!mergedPrep[key]) mergedPrep[key] = { name: i.name, tags: i.tags || ['C'], count: 0 }
+          if (!mergedPrep[key]) mergedPrep[key] = { name: i.name, tags: tagsArr, count: 0 }
           mergedPrep[key].count += i.count
         }
       })
     })
+    
     for (const item of Object.values(mergedPrep)) {
       const tagStr = item.tags && item.tags.length > 0 ? ` [${item.tags.join(', ')}]` : ''
       message += `・${item.name}${tagStr}： ${item.count}\n`
@@ -374,17 +402,18 @@ const sendToLine = () => {
           </div>
         </div>
         
-        <div v-for="(items, supplier) in filteredSuppliers" :key="supplier" class="supplier-block">
+        <!-- ⭐️ filteredSuppliersの変更に伴い、group.supplier と group.items で呼び出すように修正 -->
+        <div v-for="group in filteredSuppliers" :key="group.supplier" class="supplier-block">
           <div class="supplier-header">
-            <h2>{{ supplier }}</h2>
-            <button v-if="isEditMode" @click="removeSupplier(supplier)" class="delete-supplier-btn">業者削除</button>
+            <h2>{{ group.supplier }}</h2>
+            <button v-if="isEditMode" @click="removeSupplier(group.supplier)" class="delete-supplier-btn">業者削除</button>
           </div>
           <div class="item-grid">
-            <div v-for="item in items" :key="item" class="item-wrapper">
-              <button class="item-btn" :class="{ 'is-active': isSelected(supplier, item), 'is-edit': isEditMode }" @click="toggleItem(supplier, item)">{{ item }}</button>
-              <button v-if="isEditMode" @click="removeItem(supplier, item)" class="delete-item-btn">×</button>
+            <div v-for="item in group.items" :key="item" class="item-wrapper">
+              <button class="item-btn" :class="{ 'is-active': isSelected(group.supplier, item), 'is-edit': isEditMode }" @click="toggleItem(group.supplier, item)">{{ item }}</button>
+              <button v-if="isEditMode" @click="removeItem(group.supplier, item)" class="delete-item-btn">×</button>
             </div>
-            <button v-if="isEditMode" @click="addNewItem(supplier)" class="add-item-btn">＋ 追加</button>
+            <button v-if="isEditMode" @click="addNewItem(group.supplier)" class="add-item-btn">＋ 追加</button>
           </div>
         </div>
         
@@ -590,7 +619,7 @@ const sendToLine = () => {
 .header-area { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 h1 { font-size: 22px; margin: 0; }
 
-/* ⭐️ 発注モードのスイッチを右端に寄せる設定 */
+/* 発注モードのスイッチを右端に寄せる設定 */
 .edit-toggle { margin-left: auto; display: flex; align-items: center; }
 .edit-toggle input { display: none; }
 .toggle-label { background: #eee; padding: 8px 12px; border-radius: 20px; font-size: 14px; cursor: pointer; font-weight: bold; border: 2px solid #ccc; color: #666; }
