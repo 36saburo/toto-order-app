@@ -145,7 +145,7 @@ const updateOrderCount = (supplier, item, delta) => {
   }
 }
 
-// ⭐️ ここから下を「両店舗同時に追加・削除」するように変更しました
+// 
 const addNewSupplier = () => {
   const newName = prompt('新しい業者名を入力してください:')
   if (newName) {
