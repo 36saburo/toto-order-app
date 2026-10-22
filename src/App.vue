@@ -145,68 +145,93 @@ const updateOrderCount = (supplier, item, delta) => {
   }
 }
 
-// 
+// 業者リストだけを両店舗へ同時反映する。selectedItems（発注個数）は触らない。
+const syncSuppliers = (mutate) => {
+  store1Suppliers.value = mutate(store1Suppliers.value)
+  store2Suppliers.value = mutate(store2Suppliers.value)
+}
+
 const addNewSupplier = () => {
   const newName = prompt('新しい業者名を入力してください:')
-  if (newName) {
-    if (!store1Suppliers.value[newName]) store1Suppliers.value = { ...store1Suppliers.value, [newName]: [] }
-    if (!store2Suppliers.value[newName]) store2Suppliers.value = { ...store2Suppliers.value, [newName]: [] }
-  }
+  const name = newName?.trim()
+  if (!name) return
+  syncSuppliers((source) => {
+    if (source[name]) return source
+    return { ...source, [name]: [] }
+  })
 }
+
 const removeSupplier = (supplier) => {
-  if (confirm(`本当に「${supplier}」を削除しますか？`)) { 
-    const updated1 = { ...store1Suppliers.value }; delete updated1[supplier]; store1Suppliers.value = updated1;
-    const updated2 = { ...store2Suppliers.value }; delete updated2[supplier]; store2Suppliers.value = updated2;
-  }
+  if (!confirm(`本当に「${supplier}」を削除しますか？`)) return
+  syncSuppliers((source) => {
+    if (!source[supplier]) return source
+    const next = { ...source }
+    delete next[supplier]
+    return next
+  })
 }
+
 const addNewItem = (supplier) => {
   const newItem = prompt(`「${supplier}」に追加するアイテム名:`)
-  if (newItem) {
-    if (store1Suppliers.value[supplier] && !store1Suppliers.value[supplier].includes(newItem)) { 
-      const updated1 = { ...store1Suppliers.value }; updated1[supplier] = [...updated1[supplier], newItem]; store1Suppliers.value = updated1;
-    }
-    if (store2Suppliers.value[supplier] && !store2Suppliers.value[supplier].includes(newItem)) { 
-      const updated2 = { ...store2Suppliers.value }; updated2[supplier] = [...updated2[supplier], newItem]; store2Suppliers.value = updated2;
-    }
-  }
+  const itemName = newItem?.trim()
+  if (!itemName) return
+  syncSuppliers((source) => {
+    const items = source[supplier] ? [...source[supplier]] : []
+    if (items.includes(itemName)) return source
+    return { ...source, [supplier]: [...items, itemName] }
+  })
 }
+
 const removeItem = (supplier, item) => {
-  if (confirm(`「${item}」を削除しますか？`)) { 
-    const updated1 = { ...store1Suppliers.value }; updated1[supplier] = updated1[supplier].filter(i => i !== item); store1Suppliers.value = updated1;
-    const updated2 = { ...store2Suppliers.value }; updated2[supplier] = updated2[supplier].filter(i => i !== item); store2Suppliers.value = updated2;
-  }
+  if (!confirm(`「${item}」を削除しますか？`)) return
+  syncSuppliers((source) => {
+    if (!Array.isArray(source[supplier])) return source
+    return { ...source, [supplier]: source[supplier].filter(i => i !== item) }
+  })
 }
 
 // === PrepTab用関数 ===
-const toggleTag = (item, tag) => {
-  // ⭐️ タグ（C/洗/P）の変更も両店舗に反映させます
-  const targetName = item.name;
-  [store1Prep.value, store2Prep.value].forEach(prepList => {
-    const targetItem = prepList.find(i => i.name === targetName)
-    if (targetItem) {
-      if (!targetItem.tags) targetItem.tags = []
-      const index = targetItem.tags.indexOf(tag)
-      if (index > -1) targetItem.tags.splice(index, 1)
-      else { 
-        targetItem.tags.push(tag); 
-        const order = { 'C': 1, '洗': 2, 'P': 3 }; 
-        targetItem.tags.sort((a, b) => (order[a] || 99) - (order[b] || 99)) 
-      }
-    }
-  })
+const PREP_TAG_ORDER = { 'C': 1, '洗': 2, 'P': 3 }
+
+const nextPrepTags = (tags, tag) => {
+  const next = Array.isArray(tags) ? [...tags] : []
+  const tagIndex = next.indexOf(tag)
+  if (tagIndex > -1) next.splice(tagIndex, 1)
+  else {
+    next.push(tag)
+    next.sort((a, b) => (PREP_TAG_ORDER[a] || 99) - (PREP_TAG_ORDER[b] || 99))
+  }
+  return next
 }
+
+// タグだけを両店舗の同名項目へ反映する。count は各店舗のオブジェクトに残す。
+const toggleTag = (item, tag) => {
+  const apply = (list) => list.map(entry => (
+    entry.name === item.name ? { ...entry, tags: nextPrepTags(entry.tags, tag) } : entry
+  ))
+  store1Prep.value = apply(store1Prep.value)
+  store2Prep.value = apply(store2Prep.value)
+}
+
 const addNewPrepItem = () => {
   const name = prompt('追加する仕込みアイテム名:')
-  if (name) {
-    store1Prep.value = [...store1Prep.value, { name, count: 0, tags: ['C'] }]
-    store2Prep.value = [...store2Prep.value, { name, count: 0, tags: ['C'] }]
-  }
+  const itemName = name?.trim()
+  if (!itemName) return
+  const apply = (list) => (
+    list.some(entry => entry.name === itemName)
+      ? list
+      : [...list, { name: itemName, count: 0, tags: ['C'] }]
+  )
+  store1Prep.value = apply(store1Prep.value)
+  store2Prep.value = apply(store2Prep.value)
 }
+
 const removePrepItem = (index) => {
-  if (confirm('この仕込み項目を削除しますか？')) { 
-    const updated1 = [...store1Prep.value]; updated1.splice(index, 1); store1Prep.value = updated1;
-    const updated2 = [...store2Prep.value]; updated2.splice(index, 1); store2Prep.value = updated2;
-  }
+  const target = prepItems.value[index]
+  if (!target) return
+  if (!confirm('この仕込み項目を削除しますか？')) return
+  store1Prep.value = store1Prep.value.filter(entry => entry.name !== target.name)
+  store2Prep.value = store2Prep.value.filter(entry => entry.name !== target.name)
 }
 const resetPrep = () => {
   if (confirm(`【${currentStore.value === 'store1' ? '1号店' : '2号店'}】の仕込みカウントをすべて 0 にリセットしますか？`)) prepItems.value.forEach(item => item.count = 0)
