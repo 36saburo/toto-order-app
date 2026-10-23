@@ -77,6 +77,10 @@ onMounted(async () => {
       store2Selected.value = s2Snap.data().selected || {}
       store2Prep.value = (s2Snap.data().prep || store2Prep.value).map(i => ({ ...i, tags: i.tags || (i.tag ? [i.tag] : ['C']) }))
     } else { store2Suppliers.value = JSON.parse(JSON.stringify(suppliersData)) }
+
+    const before = catalogSnapshot()
+    alignStoreCatalogs()
+    if (catalogSnapshot() !== before) await persistStores({ notify: false })
   } catch (e) {
     store1Suppliers.value = JSON.parse(JSON.stringify(suppliersData))
     store2Suppliers.value = JSON.parse(JSON.stringify(suppliersData))
@@ -85,35 +89,132 @@ onMounted(async () => {
 
 const handleUnlock = () => isUnlocked.value = true
 
-const saveCurrentData = async () => {
+const persistStores = async ({ notify = false } = {}) => {
   isSaving.value = true
   try {
-    await setDoc(doc(db, 'toto_stores', 'store1'), { suppliers: store1Suppliers.value, selected: store1Selected.value, prep: store1Prep.value }, { merge: true })
-    await setDoc(doc(db, 'toto_stores', 'store2'), { suppliers: store2Suppliers.value, selected: store2Selected.value, prep: store2Prep.value }, { merge: true })
-    alert('💾 一時保存しました！')
-  } catch (e) { alert('保存に失敗しました。接続を確認してください。') } 
-  finally { isSaving.value = false }
+    await setDoc(doc(db, 'toto_stores', 'store1'), {
+      suppliers: store1Suppliers.value,
+      selected: store1Selected.value,
+      prep: store1Prep.value
+    })
+    await setDoc(doc(db, 'toto_stores', 'store2'), {
+      suppliers: store2Suppliers.value,
+      selected: store2Selected.value,
+      prep: store2Prep.value
+    })
+    if (notify) alert('💾 一時保存しました！')
+    return true
+  } catch (e) {
+    console.error('保存エラー:', e)
+    alert(notify ? '保存に失敗しました。接続を確認してください。' : 'リストは画面上で更新しましたが、保存に失敗しました。接続を確認してください。')
+    return false
+  } finally { isSaving.value = false }
+}
+
+const saveCurrentData = () => persistStores({ notify: true })
+
+const toItemList = (value) => (
+  Array.isArray(value) ? value.map(item => String(item).trim()).filter(Boolean) : []
+)
+
+const mergeSupplierMaps = (first, second) => {
+  const merged = {}
+  const seen = new Set()
+  ;[...Object.keys(first || {}), ...Object.keys(second || {})].forEach(key => {
+    if (seen.has(key)) return
+    seen.add(key)
+    const items = []
+    const itemSeen = new Set()
+    ;[...toItemList(first?.[key]), ...toItemList(second?.[key])].forEach(item => {
+      if (itemSeen.has(item)) return
+      itemSeen.add(item)
+      items.push(item)
+    })
+    merged[key] = items
+  })
+  return merged
+}
+
+const tagListOf = (item) => {
+  if (!item) return []
+  if (Array.isArray(item.tags) && item.tags.length) return [...item.tags]
+  if (item.tag) return [item.tag]
+  return ['C']
+}
+
+const mergePrepCatalog = (first, second) => {
+  const names = []
+  const seen = new Set()
+  const firstByName = {}
+  const secondByName = {}
+  ;(first || []).forEach(item => {
+    if (!item?.name || seen.has(item.name)) return
+    seen.add(item.name)
+    names.push(item.name)
+    firstByName[item.name] = item
+  })
+  ;(second || []).forEach(item => {
+    if (!item?.name) return
+    secondByName[item.name] = item
+    if (seen.has(item.name)) return
+    seen.add(item.name)
+    names.push(item.name)
+  })
+  const order = { 'C': 1, '洗': 2, 'P': 3 }
+  return names.map(name => {
+    const tags = []
+    ;[...tagListOf(firstByName[name]), ...tagListOf(secondByName[name])].forEach(tag => {
+      if (!tags.includes(tag)) tags.push(tag)
+    })
+    tags.sort((a, b) => (order[a] || 99) - (order[b] || 99))
+    if (tags.length === 0) tags.push('C')
+    return { name, tags }
+  })
+}
+
+const catalogSnapshot = () => JSON.stringify({
+  s1: store1Suppliers.value,
+  s2: store2Suppliers.value,
+  p1: store1Prep.value,
+  p2: store2Prep.value
+})
+
+const alignStoreCatalogs = () => {
+  const supplierMap = mergeSupplierMaps(store1Suppliers.value, store2Suppliers.value)
+  const prepCatalog = mergePrepCatalog(store1Prep.value, store2Prep.value)
+  const counts1 = Object.fromEntries(store1Prep.value.map(item => [item.name, item.count || 0]))
+  const counts2 = Object.fromEntries(store2Prep.value.map(item => [item.name, item.count || 0]))
+  store1Suppliers.value = JSON.parse(JSON.stringify(supplierMap))
+  store2Suppliers.value = JSON.parse(JSON.stringify(supplierMap))
+  store1Prep.value = prepCatalog.map(item => ({ name: item.name, tags: [...item.tags], count: counts1[item.name] || 0 }))
+  store2Prep.value = prepCatalog.map(item => ({ name: item.name, tags: [...item.tags], count: counts2[item.name] || 0 }))
 }
 
 const filteredSuppliers = computed(() => {
   const currentSuppliers = suppliers.value
-  const query = searchQuery.value.toLowerCase()
+  const query = isEditMode.value ? '' : searchQuery.value.trim().toLowerCase()
   const masterKeys = Object.keys(suppliersData)
   const resultArr = []
+  const seen = new Set()
+
+  const pushSupplier = (supplier) => {
+    const items = toItemList(currentSuppliers[supplier])
+    const matchedItems = query
+      ? items.filter(item => item.toLowerCase().includes(query) || supplier.toLowerCase().includes(query))
+      : items
+    const supplierMatches = !query || supplier.toLowerCase().includes(query)
+    if (matchedItems.length > 0 || (isEditMode.value && supplierMatches)) {
+      resultArr.push({ supplier, items: matchedItems })
+    }
+  }
 
   masterKeys.forEach(supplier => {
-    if (currentSuppliers[supplier]) {
-      const items = currentSuppliers[supplier]
-      const matchedItems = query ? items.filter(item => item.toLowerCase().includes(query) || supplier.toLowerCase().includes(query)) : items
-      if (matchedItems.length > 0) resultArr.push({ supplier, items: matchedItems })
-    }
+    if (!Object.prototype.hasOwnProperty.call(currentSuppliers, supplier)) return
+    seen.add(supplier)
+    pushSupplier(supplier)
   })
   Object.keys(currentSuppliers).forEach(supplier => {
-    if (!masterKeys.includes(supplier)) {
-      const items = currentSuppliers[supplier]
-      const matchedItems = query ? items.filter(item => item.toLowerCase().includes(query) || supplier.toLowerCase().includes(query)) : items
-      if (matchedItems.length > 0) resultArr.push({ supplier, items: matchedItems })
-    }
+    if (!seen.has(supplier)) pushSupplier(supplier)
   })
   return resultArr
 })
@@ -145,10 +246,13 @@ const updateOrderCount = (supplier, item, delta) => {
   }
 }
 
-// 業者リストだけを両店舗へ同時反映する。selectedItems（発注個数）は触らない。
-const syncSuppliers = (mutate) => {
-  store1Suppliers.value = mutate(store1Suppliers.value)
-  store2Suppliers.value = mutate(store2Suppliers.value)
+// 業者リストは両店舗で同じ内容にし、発注個数（selectedItems）は書き換えない。
+const syncSuppliers = async (mutate) => {
+  const next = mutate(mergeSupplierMaps(store1Suppliers.value, store2Suppliers.value))
+  const cloned = JSON.parse(JSON.stringify(next))
+  store1Suppliers.value = cloned
+  store2Suppliers.value = JSON.parse(JSON.stringify(cloned))
+  await persistStores({ notify: false })
 }
 
 const addNewSupplier = () => {
@@ -204,34 +308,38 @@ const nextPrepTags = (tags, tag) => {
   return next
 }
 
-// タグだけを両店舗の同名項目へ反映する。count は各店舗のオブジェクトに残す。
+// 仕込み項目の名前とタグは両店舗で揃え、count は店舗ごとの値を残す。
+const syncPrepCatalog = async (mutate) => {
+  const counts1 = Object.fromEntries(store1Prep.value.map(item => [item.name, item.count || 0]))
+  const counts2 = Object.fromEntries(store2Prep.value.map(item => [item.name, item.count || 0]))
+  const next = mutate(mergePrepCatalog(store1Prep.value, store2Prep.value))
+  store1Prep.value = next.map(item => ({ name: item.name, tags: [...item.tags], count: counts1[item.name] || 0 }))
+  store2Prep.value = next.map(item => ({ name: item.name, tags: [...item.tags], count: counts2[item.name] || 0 }))
+  await persistStores({ notify: false })
+}
+
 const toggleTag = (item, tag) => {
-  const apply = (list) => list.map(entry => (
+  syncPrepCatalog(catalog => catalog.map(entry => (
     entry.name === item.name ? { ...entry, tags: nextPrepTags(entry.tags, tag) } : entry
-  ))
-  store1Prep.value = apply(store1Prep.value)
-  store2Prep.value = apply(store2Prep.value)
+  )))
 }
 
 const addNewPrepItem = () => {
   const name = prompt('追加する仕込みアイテム名:')
   const itemName = name?.trim()
   if (!itemName) return
-  const apply = (list) => (
-    list.some(entry => entry.name === itemName)
-      ? list
-      : [...list, { name: itemName, count: 0, tags: ['C'] }]
-  )
-  store1Prep.value = apply(store1Prep.value)
-  store2Prep.value = apply(store2Prep.value)
+  syncPrepCatalog(catalog => (
+    catalog.some(entry => entry.name === itemName)
+      ? catalog
+      : [...catalog, { name: itemName, tags: ['C'] }]
+  ))
 }
 
 const removePrepItem = (index) => {
   const target = prepItems.value[index]
   if (!target) return
   if (!confirm('この仕込み項目を削除しますか？')) return
-  store1Prep.value = store1Prep.value.filter(entry => entry.name !== target.name)
-  store2Prep.value = store2Prep.value.filter(entry => entry.name !== target.name)
+  syncPrepCatalog(catalog => catalog.filter(entry => entry.name !== target.name))
 }
 const resetPrep = () => {
   if (confirm(`【${currentStore.value === 'store1' ? '1号店' : '2号店'}】の仕込みカウントをすべて 0 にリセットしますか？`)) prepItems.value.forEach(item => item.count = 0)
