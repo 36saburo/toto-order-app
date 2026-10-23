@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   show: Boolean,
@@ -12,6 +12,65 @@ const props = defineProps({
 const emit = defineEmits(['close'])
 
 const sendMode = ref('separate')
+
+const orderedSuppliers = computed(() => {
+  const names = []
+  const seen = new Set()
+  ;[props.store1Selected, props.store2Selected].forEach(selected => {
+    Object.entries(selected || {}).forEach(([supplier, itemsObj]) => {
+      if (!itemsObj || Object.keys(itemsObj).length === 0 || seen.has(supplier)) return
+      seen.add(supplier)
+      names.push(supplier)
+    })
+  })
+  return names
+})
+
+const parseQty = (value) => {
+  const text = String(value ?? '').trim().replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+  if (!text) return null
+  const matched = text.match(/^(\d+(?:\.\d+)?)(.*)$/)
+  if (!matched) return { amount: null, unit: '', raw: text }
+  return { amount: Number(matched[1]), unit: matched[2].trim(), raw: text }
+}
+
+const formatAmount = (amount) => (
+  Number.isInteger(amount) ? String(amount) : String(Math.round(amount * 100) / 100)
+)
+
+const combineQty = (a, b) => {
+  const left = parseQty(a)
+  const right = parseQty(b)
+  if (!left && !right) return ''
+  if (!left) return right.amount == null ? right.raw : `${formatAmount(right.amount)}${right.unit}`
+  if (!right) return left.amount == null ? left.raw : `${formatAmount(left.amount)}${left.unit}`
+  const unitsConflict = left.unit && right.unit && left.unit !== right.unit
+  if (left.amount == null || right.amount == null || unitsConflict) return `${left.raw}+${right.raw}`
+  return `${formatAmount(left.amount + right.amount)}${left.unit || right.unit}`
+}
+
+const supplierOrderLines = (supplier) => {
+  const store1Items = props.store1Selected?.[supplier] || {}
+  const store2Items = props.store2Selected?.[supplier] || {}
+  const names = []
+  const seen = new Set()
+  ;[store1Items, store2Items].forEach(itemsObj => {
+    Object.keys(itemsObj).forEach(item => {
+      if (seen.has(item)) return
+      seen.add(item)
+      names.push(item)
+    })
+  })
+  return names.map(item => {
+    const qty = combineQty(store1Items[item], store2Items[item])
+    return qty ? `・${item} （${qty}）` : `・${item}`
+  }).join('\n')
+}
+
+const sendSupplierToLine = (supplier) => {
+  const message = `【トトグループ 発注】${supplier}\n\n${supplierOrderLines(supplier)}`
+  window.location.href = `https://line.me/R/msg/text/?${encodeURIComponent(message.trim())}`
+}
 
 // ⭐️ App.vue からお引っ越ししてきたLINE送信処理
 const sendToLine = () => {
@@ -57,24 +116,23 @@ const sendToLine = () => {
   } else {
     message += '--- 🛒 全店舗 合算発注リスト ---\n'
     const mergedOrders = {}
-    
+
     ;[props.store1Selected, props.store2Selected].forEach(orderObj => {
       if (!orderObj) return
       for (const [supplier, itemsObj] of Object.entries(orderObj)) {
         if (!mergedOrders[supplier]) mergedOrders[supplier] = {}
         for (const [item, memo] of Object.entries(itemsObj)) {
-          if (!mergedOrders[supplier][item]) mergedOrders[supplier][item] = []
-          const memoText = memo ? String(memo).trim() : ''
-          if (memoText !== '') mergedOrders[supplier][item].push(memoText)
+          mergedOrders[supplier][item] = Object.prototype.hasOwnProperty.call(mergedOrders[supplier], item)
+            ? combineQty(mergedOrders[supplier][item], memo)
+            : (memo ? String(memo).trim() : '')
         }
       }
     })
-    
+
     for (const [supplier, itemsObj] of Object.entries(mergedOrders)) {
       message += `［${supplier}］\n`
-      for (const [item, memos] of Object.entries(itemsObj)) {
-        const memoStr = memos.length > 0 ? ` （${memos.join(', ')}）` : ''
-        message += `・${item}${memoStr}\n`
+      for (const [item, qty] of Object.entries(itemsObj)) {
+        message += qty ? `・${item} （${qty}）\n` : `・${item}\n`
       }
     }
 
@@ -160,9 +218,19 @@ const sendToLine = () => {
         </div>
       </div>
 
+      <div v-if="orderedSuppliers.length" class="supplier-send-list">
+        <p class="supplier-send-label">業者ごとに送る（1号店と2号店の個数を足した数）</p>
+        <div v-for="supplier in orderedSuppliers" :key="supplier" class="supplier-send-block">
+          <button type="button" class="supplier-send-btn" @click="sendSupplierToLine(supplier)">
+            {{ supplier }}
+          </button>
+          <p class="supplier-send-preview">{{ supplierOrderLines(supplier) }}</p>
+        </div>
+      </div>
+
       <div class="modal-actions">
         <button class="back-btn" @click="emit('close')">戻る</button>
-        <button class="send-btn" @click="sendToLine">LINEに送る</button>
+        <button class="send-btn" @click="sendToLine">まとめてLINEに送る</button>
       </div>
     </div>
   </div>
@@ -181,6 +249,11 @@ const sendToLine = () => {
 .no-data { font-size: 13px; color: #999; margin: 4px 0; }
 .modal-item-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px dashed #eee; }
 .modal-memo-input { width: 90px; padding: 6px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; }
+.supplier-send-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.supplier-send-label { margin: 0; font-size: 13px; font-weight: bold; color: #333; }
+.supplier-send-block { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.supplier-send-btn { padding: 8px 12px; font-size: 13px; font-weight: bold; background: white; color: #00B900; border: 2px solid #00B900; border-radius: 999px; cursor: pointer; }
+.supplier-send-preview { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-line; color: #333; }
 .modal-actions { display: flex; gap: 10px; }
 .back-btn, .send-btn { flex: 1; padding: 14px; font-size: 16px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; }
 .back-btn { background-color: #eee; color: #333; }
